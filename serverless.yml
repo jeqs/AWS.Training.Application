@@ -1,0 +1,271 @@
+service: ${self:custom.projectFullName}
+frameworkVersion: '2'
+useDotenv: true
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  lambdaHashingVersion: 20201221
+  profile: serverlessUser
+  stackTags:
+    Ambiente: ${self:custom.stage}
+    AreaResponsable: DevelopStefanini
+    Comentarios: " "
+    Criticidad: ALTA
+    Disponibilidad: 7x24
+    Nube: AWS
+    Plataforma: Serverless Framework
+    Proyecto: ${self:custom.project}
+    Tecnologia: Serverless
+    UnidadNegocio: Fábrica de Sofware
+  region: us-east-2
+
+plugins:
+  - serverless-webpack
+
+custom:
+  projectFullName: ${self:custom.project}
+  stage: dev
+  project: AWSTrainingApplication
+  integrationBaseStackName: awstraining-api-gateway-${self:custom.stage}
+  tableAuditory: ddb-${self:custom.projectFullName}-${self:custom.stage}-AuditoryTable
+  queueAuditory: sqs-${self:custom.projectFullName}-${self:custom.stage}-AuditoryQueue
+  basePath: ${self:custom.projectFullName}/${self:custom.stage}
+  tablePersonas: ${self:custom.projectFullName}-${self:custom.stage}-Personas
+  tableCapacitaciones: ${self:custom.projectFullName}-${self:custom.stage}-Capacitaciones
+  tableAsistencias: ${self:custom.projectFullName}-${self:custom.stage}-Asistencias
+
+package:
+  individually: true
+
+functions:
+  auditory:
+    name: func-${self:custom.projectFullName}-${self:custom.stage}-auditory
+    handler: lambda/cross/auditoryControllerHandler.handler
+    environment:
+      TABLE_AUDITORY:      ${self:custom.tableAuditory}     
+    role: auditoryLambdaRole
+    events:
+        - sqs:
+            arn:
+              Fn::GetAtt:
+                - RestrictiveListsAuditoryQueue
+                - Arn
+  testAuditory:
+    name: func-${self:custom.projectFullName}-${self:custom.stage}-testAuditory
+    handler: lambda/cross/testAuditoryControllerHandler.handler
+    role: testAuditoryLambdaRole
+    environment:
+      QUEUE_AUDITORY:         ${self:custom.queueAuditory}
+    events:
+        - http:
+            path: ${self:custom.basePath}/testAuditory
+            method: POST
+            cors: true
+  personas:
+    name: func-${self:custom.projectFullName}-${self:custom.stage}-personas
+    handler: lambda/cross/personasControllerHandler.handler
+    role: personaLambdaRole
+    environment:
+      QUEUE_AUDITORY:         ${self:custom.queueAuditory}
+      TABLA_PERSONAS:         ${self:custom.tablePersonas}
+    events:
+        - http:
+            path: ${self:custom.basePath}/personas
+            method: POST
+            cors: true
+  capacitaciones:
+    name: func-${self:custom.projectFullName}-${self:custom.stage}-capacitaciones
+    handler: lambda/cross/capacitacionesControllerHandler.handler
+    role: personaLambdaRole
+    environment:
+      QUEUE_AUDITORY:         ${self:custom.queueAuditory}
+      TABLA_CAPACITACION:     ${self:custom.tableCapacitaciones}
+    events:
+        - http:
+            path: ${self:custom.basePath}/capacitaciones
+            method: POST
+            cors: true
+  asistencias:
+    name: func-${self:custom.projectFullName}-${self:custom.stage}-asistencias
+    handler: lambda/cross/asistenciasControllerHandler.handler
+    role: personaLambdaRole
+    environment:
+      QUEUE_AUDITORY:       ${self:custom.queueAuditory}
+      TABLA_ASISTENCIA:     ${self:custom.tableAsistencias}
+      TABLA_PERSONAS:       ${self:custom.tablePersonas}
+      TABLA_CAPACITACION:     ${self:custom.tableCapacitaciones}
+    events:
+        - http:
+            path: ${self:custom.basePath}/asistencias
+            method: POST
+            cors: true
+
+resources:
+  Resources:
+    personaLambdaRole:
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Lambda Role'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        Path: /
+        Policies:
+          - PolicyName: 'send-message-sqs-policy'
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sqs:SendMessage
+                  Resource:
+                    - Fn::GetAtt: [ RestrictiveListsAuditoryQueue, Arn ]
+          - PolicyName: 'write-dynamodb-policy'
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:PutItem
+                    - dynamodb:Query
+                    - dynamodb:Scan
+                    - dynamodb:GetItem
+                  Resource:
+                    - Fn::GetAtt: [ RestrictiveListsPersonasTable, Arn ]
+                    - Fn::GetAtt: [ RestrictiveListsCapacitacionesTable, Arn ]
+                    - Fn::GetAtt: [ RestrictiveListsAsistenciasTable, Arn ]
+        RoleName: iam-${self:custom.projectFullName}-${self:custom.stage}-personaLambdaRole
+        Tags: 
+          - Key: Name
+            Value: iam-${self:custom.projectFullName}-${self:custom.stage}-personaLambdaRole
+    auditoryLambdaRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Lambda Role'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        Path: /
+        Policies:
+          - PolicyName: 'read-message-sqs-policy'
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sqs:DeleteMessage
+                    - sqs:ReceiveMessage
+                    - sqs:GetQueueAttributes
+                  Resource:
+                    - Fn::GetAtt: [ RestrictiveListsAuditoryQueue, Arn ]
+          - PolicyName: 'write-dynamodb-policy'
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:PutItem
+                  Resource:
+                    - Fn::GetAtt: [ RestrictiveListsAuditoryTable, Arn ]
+        RoleName: iam-${self:custom.projectFullName}-${self:custom.stage}-auditoryLambdaRole
+        Tags: 
+          - Key: Name
+            Value: iam-${self:custom.projectFullName}-${self:custom.stage}-auditoryLambdaRole
+    testAuditoryLambdaRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Lambda Role'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        Path: /
+        Policies:
+          - PolicyName: 'send-message-sqs-policy'
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sqs:SendMessage
+                  Resource:
+                    - Fn::GetAtt: [ RestrictiveListsAuditoryQueue, Arn ]
+        RoleName: iam-${self:custom.projectFullName}-${self:custom.stage}-testAuditoryLambdaRole
+        Tags: 
+          - Key: Name
+            Value: iam-${self:custom.projectFullName}-${self:custom.stage}-testAuditoryLambdaRole
+    RestrictiveListsAuditoryQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:custom.queueAuditory}
+    RestrictiveListsAuditoryTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableAuditory}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+    RestrictiveListsPersonasTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tablePersonas}
+        AttributeDefinitions:
+          - AttributeName: identificacion
+            AttributeType: S
+        KeySchema:
+          - AttributeName: identificacion
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+    RestrictiveListsCapacitacionesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableCapacitaciones}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+    RestrictiveListsAsistenciasTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableAsistencias}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
